@@ -48,8 +48,6 @@ typedef enum{
 
 } sub_transmit_period_t;
 
-uint16_t sub_transmit_periods[ENUM_MAX];
-
 
 esp_now_send_status_t sub_get_last_message_status(void);
 sub_status_t sub_enable_sleep(void);

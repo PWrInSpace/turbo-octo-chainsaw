@@ -2,14 +2,26 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stddef.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/projdefs.h"
+
+#include "esp_timer.h"
+#include "esp_log.h"
 #include "esp_now.h"
 
 #include "file.h"
 
-#define MAX_TIMEOUT 1800000
+#define MAX_NACK_TIMEOUT 1800000
+#define MIN_NACK_TIMEOUT 120000
+
+#define MAX_PERIOD_TIMEOUT 600000
+#define MIN_PERIOD_TIMEOUT 10
+
+#define OBC_MAC_ADDRESS {0x04, 0x20, 0x04, 0x20, 0x04, 0x20}
+
 
 
 static struct{
@@ -27,6 +39,7 @@ static struct{
     esp_now_send_status_t last_message_status;
     uint16_t interval_ms;
     SemaphoreHandle_t mutex;
+    uint64_t last_tx_time_ms;
 
 } sub_struct;
 
@@ -38,7 +51,7 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     sub_struct.disable_sleep = init_struct->disable_sleep;
 
-    if(TX_NACK_TIMEOUT_MS > MAX_TIMEOUT){
+    if(TX_NACK_TIMEOUT_MS > MAX_NACK_TIMEOUT || TX_NACK_TIMEOUT_MS < MIN_NACK_TIMEOUT){
 
         return SUB_TIMES_ERR;
     }
@@ -55,7 +68,7 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     for(int i = 0; i < ENUM_MAX; i++){
 
-        if(transmit_periods[i] > MAX_TIMEOUT){
+        if(transmit_periods[i] > MAX_PERIOD_TIMEOUT || transmit_periods[i] < MIN_PERIOD_TIMEOUT){
 
             return SUB_TIMES_ERR;
         }
@@ -106,6 +119,8 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
         return SUB_ESP_NOW_ERR;
     }
 
+    sub_struct.last_tx_time_ms = esp_timer_get_time();
+
     return SUB_OK;
 }
 
@@ -124,18 +139,69 @@ static sub_status_t sleep_unlock(void){
 
 esp_now_send_status_t sub_get_last_message_status(void){
 
-    return ESP_NOW_SEND_SUCCESS;
+    return sub_struct.last_message_status;
 }
 
 sub_status_t sub_enable_sleep(void){
     return true;
 }
 
-static sub_status_t send_cb(){
+static void send_cb(const uint8_t *mac, esp_now_send_status_t status){
 
-    return SUB_OK;
+
+    uint64_t current_time = esp_timer_get_time();
+
+    if(status == ESP_NOW_SEND_SUCCESS){
+
+        sub_struct.last_message_status = ESP_NOW_SEND_SUCCESS;
+
+        sub_struct.last_tx_time_ms = current_time;
+
+    }
+    else{
+
+        sub_struct.last_message_status = ESP_NOW_SEND_FAIL;
+
+        if(current_time - sub_struct.last_tx_time_ms > sub_struct.tx_nack_timeout_ms){
+
+            if(xSemaphoreTake(sub_struct.mutex, portMAX_DELAY) == pdTRUE){
+
+                sub_struct.interval_ms = sub_struct.transmit_periods[SLEEP_MS];
+
+                xSemaphoreGive(sub_struct.mutex);
+
+            }
+        }
+    }
 }
 
-static sub_status_t recv_cb(){
-    return SUB_OK;
+static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t len){
+
+    uint8_t *mac_address = info->src_addr;
+
+    uint8_t obc_mac_addr[6] = OBC_MAC_ADDRESS;
+
+    if(memcmp(mac_address, obc_mac_addr, 6)==0){
+
+        if(len == 1){
+
+            if(xSemaphoreTake(sub_struct.mutex, portMAX_DELAY) == pdTRUE){
+
+                sub_struct.interval_ms = sub_struct.transmit_periods[data[0]];
+
+                xSemaphoreGive(sub_struct.mutex);
+            }
+        }
+    }
+    else{
+
+        if(sub_struct._on_data_rx != NULL){
+
+            xQueueSend(sub_struct.rx_data, data, 0);
+        }
+        else{
+
+            sub_struct._on_data_rx(data, len);
+        }
+    }
 }
