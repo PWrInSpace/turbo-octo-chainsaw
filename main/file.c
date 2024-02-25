@@ -2,14 +2,25 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stddef.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/projdefs.h"
+
+#include "esp_log.h"
 #include "esp_now.h"
 
 #include "file.h"
 
-#define MAX_TIMEOUT 1800000
+#define MAX_NACK_TIMEOUT 1800000
+#define MIN_NACK_TIMEOUT 120000
+
+#define MAX_PERIOD_TIMEOUT 600000
+#define MIN_PERIOD_TIMEOUT 10
+
+#define OBC_MAC_ADDRESS {0x04, 0x20, 0x04, 0x20, 0x04, 0x20}
+
 
 
 static struct{
@@ -27,6 +38,7 @@ static struct{
     esp_now_send_status_t last_message_status;
     uint16_t interval_ms;
     SemaphoreHandle_t mutex;
+    uint64_t last_tx_time_ms;
 
 } sub_struct;
 
@@ -38,7 +50,7 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     sub_struct.disable_sleep = init_struct->disable_sleep;
 
-    if(TX_NACK_TIMEOUT_MS > MAX_TIMEOUT){
+    if(TX_NACK_TIMEOUT_MS > MAX_NACK_TIMEOUT || TX_NACK_TIMEOUT_MS < MIN_NACK_TIMEOUT){
 
         return SUB_TIMES_ERR;
     }
@@ -55,7 +67,7 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     for(int i = 0; i < ENUM_MAX; i++){
 
-        if(transmit_periods[i] > MAX_TIMEOUT){
+        if(transmit_periods[i] > MAX_PERIOD_TIMEOUT || transmit_periods[i] < MIN_PERIOD_TIMEOUT){
 
             return SUB_TIMES_ERR;
         }
@@ -105,6 +117,8 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
         return SUB_ESP_NOW_ERR;
     }
+
+    sub_struct.last_tx_time_ms = esp_timer_get_time();
 
     return SUB_OK;
 }
