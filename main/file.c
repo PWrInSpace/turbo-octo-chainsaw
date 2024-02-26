@@ -22,6 +22,9 @@
 
 #define OBC_MAC_ADDRESS {0x04, 0x20, 0x04, 0x20, 0x04, 0x20}
 
+#define MAC_ADDRESS_SIZE 6
+#define STATE_MSG_SIZE 1
+
 
 
 static struct{
@@ -179,11 +182,11 @@ static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t
 
     uint8_t *mac_address = info->src_addr;
 
-    uint8_t obc_mac_addr[6] = OBC_MAC_ADDRESS;
+    uint8_t obc_mac_addr[MAC_ADDRESS_SIZE] = OBC_MAC_ADDRESS;
 
-    if(memcmp(mac_address, obc_mac_addr, 6)==0){
+    if(memcmp(mac_address, obc_mac_addr, MAC_ADDRESS_SIZE)==0){
 
-        if(len == 1){
+        if(len == STATE_MSG_SIZE && data[0] < ENUM_MAX){
 
             if(xSemaphoreTake(sub_struct.mutex, portMAX_DELAY) == pdTRUE){
 
