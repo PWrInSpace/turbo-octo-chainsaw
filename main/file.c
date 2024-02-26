@@ -8,7 +8,6 @@
 #include "freertos/semphr.h"
 #include "freertos/projdefs.h"
 
-#include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_now.h"
 
