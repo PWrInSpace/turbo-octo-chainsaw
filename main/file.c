@@ -21,7 +21,6 @@
 
 #define OBC_MAC_ADDRESS {0x04, 0x20, 0x04, 0x20, 0x04, 0x20}
 
-#define MAC_ADDRESS_SIZE 6
 #define STATE_MSG_SIZE 1
 
 
@@ -34,7 +33,9 @@ static struct{
     data_to_transmit _data_to_transmit;
     on_data_rx _on_data_rx;
     uint16_t transmit_periods[ENUM_MAX];
-    QueueHandle_t rx_data;
+    QueueHandle_t rx_queue;
+    QueueHandle_t send_cb_queue;
+    QueueHandle_t recv_cb_queue;
     SemaphoreHandle_t sleep_lock;
     uint8_t *tx_buffer;
     uint8_t tx_data_size;
@@ -80,8 +81,8 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     if(init_struct->_on_data_rx == NULL){
 
-        sub_struct.rx_data = xQueueCreate(10, sizeof(uint32_t));
-        if(sub_struct.rx_data == NULL){
+        sub_struct.rx_queue = xQueueCreate(10, sizeof(uint32_t));
+        if(sub_struct.rx_queue == NULL){
 
             return SUB_QUEUE_ERR;
         }
@@ -89,7 +90,7 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
     else{
 
         sub_struct._on_data_rx = init_struct->_on_data_rx;
-        sub_struct.rx_data = NULL;
+        sub_struct.rx_queue = NULL;
     }
 
     sub_struct.sleep_lock = xSemaphoreCreateMutex();
@@ -150,19 +151,45 @@ sub_status_t sub_enable_sleep(void){
 
 static void send_cb(const uint8_t *mac, esp_now_send_status_t status){
 
+    sub_send_cb_data_t send_data;
+
+    send_data.message_status = status;
+
+    memcpy(send_data.mac, mac, ESP_NOW_ETH_ALEN);
+
+    xQueueSend(sub_struct.send_cb_queue, &send_data, 0)
+    
+}
+
+static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t len){
+
+    if(info->src_addr == NULL || data == NULL || len == 0){
+        return;
+    }
+
+    sub_recv_cb_data_t recv_data;
+
+    memcpy(recv_data.mac, info->src_addr, ESP_NOW_ETH_ALEN);
+    memcpy(recv_data.data, data, len);
+    recv_data.data_size = len;
+
+    xQueueSend(sub_struct.recv_cb_queue, &recv_data, 0);
+
+}
+
+static void on_send(sub_send_cb_data_t *send_data){
+
 
     uint64_t current_time = esp_timer_get_time();
 
-    if(status == ESP_NOW_SEND_SUCCESS){
+    sub_struct.last_message_status = send_data->message_status;
 
-        sub_struct.last_message_status = ESP_NOW_SEND_SUCCESS;
+    if(send_data->message_status == ESP_NOW_SEND_SUCCESS){
 
         sub_struct.last_tx_time_ms = current_time;
 
     }
     else{
-
-        sub_struct.last_message_status = ESP_NOW_SEND_FAIL;
 
         if(current_time - sub_struct.last_tx_time_ms > sub_struct.tx_nack_timeout_ms){
 
@@ -177,19 +204,17 @@ static void send_cb(const uint8_t *mac, esp_now_send_status_t status){
     }
 }
 
-static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t len){
+static void on_recive(sub_recv_cb_data_t *recv_data){
 
-    uint8_t *mac_address = info->src_addr;
+    uint8_t obc_mac_addr[ESP_NOW_ETH_ALEN] = OBC_MAC_ADDRESS;
 
-    uint8_t obc_mac_addr[MAC_ADDRESS_SIZE] = OBC_MAC_ADDRESS;
+    if(memcmp(recv_data->mac, obc_mac_addr, ESP_NOW_ETH_ALEN)==0){
 
-    if(memcmp(mac_address, obc_mac_addr, MAC_ADDRESS_SIZE)==0){
-
-        if(len == STATE_MSG_SIZE && data[0] < ENUM_MAX){
+        if(recv_data->data_size == STATE_MSG_SIZE && recv_data->data[0] < ENUM_MAX){
 
             if(xSemaphoreTake(sub_struct.mutex, portMAX_DELAY) == pdTRUE){
 
-                sub_struct.interval_ms = sub_struct.transmit_periods[data[0]];
+                sub_struct.interval_ms = sub_struct.transmit_periods[recv_data->data[0]];
 
                 xSemaphoreGive(sub_struct.mutex);
             }
@@ -199,11 +224,12 @@ static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t
 
         if(sub_struct._on_data_rx != NULL){
 
-            xQueueSend(sub_struct.rx_data, data, 0);
+            xQueueSend(sub_struct.rx_queue, recv_data->data, 0);
         }
         else{
 
-            sub_struct._on_data_rx(data, len);
+            sub_struct._on_data_rx(recv_data->data, recv_data->data_size);
         }
     }
+    
 }
