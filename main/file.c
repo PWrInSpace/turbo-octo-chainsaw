@@ -186,9 +186,6 @@ static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t
     sub_recv_cb_data_t recv_data;
 
     memcpy(recv_data.mac, info->src_addr, ESP_NOW_ETH_ALEN);
-
-    
-
     memcpy(recv_data.data, data, len);
     recv_data.data_size = len;
 
