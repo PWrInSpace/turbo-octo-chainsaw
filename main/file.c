@@ -179,7 +179,7 @@ static void send_cb(const uint8_t *mac, esp_now_send_status_t status){
 
 static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t len){
 
-    if(info->src_addr == NULL || data == NULL || len == 0){
+    if(info->src_addr == NULL || data == NULL || len == 0 || len > MAX_DATA_LENGTH){
         return;
     }
 
@@ -187,9 +187,7 @@ static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t
 
     memcpy(recv_data.mac, info->src_addr, ESP_NOW_ETH_ALEN);
 
-    if(len > MAX_DATA_LENGTH){
-        return;
-    }
+    
 
     memcpy(recv_data.data, data, len);
     recv_data.data_size = len;
