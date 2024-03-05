@@ -26,7 +26,7 @@ typedef void (*on_data_rx)(uint8_t *buffer, size_t buffer_size);
 
 typedef struct {
 
-    uint8_t dev_mac_address[6];
+    uint8_t dev_mac_address[ESP_NOW_ETH_ALEN];
     bool disable_sleep;
     uint32_t tx_nack_timeout_ms;
     data_to_transmit _data_to_transmit;
