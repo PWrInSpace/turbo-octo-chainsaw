@@ -23,6 +23,8 @@
 
 #define STATE_MSG_SIZE 1
 
+#define MAX_TX_BUFFER_SIZE 250
+
 
 
 static struct{
@@ -124,6 +126,20 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     sub_struct.last_tx_time_ms = esp_timer_get_time();
 
+    sub_struct.send_cb_queue = xQueueCreate(1, sizeof(sub_send_cb_data_t));
+
+    if(sub_struct.send_cb_queue == NULL){
+
+        return SUB_QUEUE_ERR;
+    }
+
+    sub_struct.recv_cb_queue = xQueueCreate(1, sizeof(sub_recv_cb_data_t));
+
+    if(sub_struct.recv_cb_queue == NULL){
+
+        return SUB_QUEUE_ERR;
+    }
+
     return SUB_OK;
 }
 
@@ -157,7 +173,7 @@ static void send_cb(const uint8_t *mac, esp_now_send_status_t status){
 
     memcpy(send_data.mac, mac, ESP_NOW_ETH_ALEN);
 
-    xQueueSend(sub_struct.send_cb_queue, &send_data, 0)
+    xQueueSend(sub_struct.send_cb_queue, &send_data, 0);
     
 }
 
@@ -170,6 +186,11 @@ static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t
     sub_recv_cb_data_t recv_data;
 
     memcpy(recv_data.mac, info->src_addr, ESP_NOW_ETH_ALEN);
+
+    if(len > MAX_DATA_LENGTH){
+        return;
+    }
+
     memcpy(recv_data.data, data, len);
     recv_data.data_size = len;
 
@@ -180,18 +201,18 @@ static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t
 static void on_send(sub_send_cb_data_t *send_data){
 
 
-    uint64_t current_time = esp_timer_get_time();
+    uint64_t current_time_ms = esp_timer_get_time()/1000;
 
     sub_struct.last_message_status = send_data->message_status;
 
     if(send_data->message_status == ESP_NOW_SEND_SUCCESS){
 
-        sub_struct.last_tx_time_ms = current_time;
+        sub_struct.last_tx_time_ms = current_time_ms;
 
     }
     else{
 
-        if(current_time - sub_struct.last_tx_time_ms > sub_struct.tx_nack_timeout_ms){
+        if(current_time_ms - sub_struct.last_tx_time_ms > sub_struct.tx_nack_timeout_ms){
 
             if(xSemaphoreTake(sub_struct.mutex, portMAX_DELAY) == pdTRUE){
 
@@ -222,7 +243,7 @@ static void on_recive(sub_recv_cb_data_t *recv_data){
     }
     else{
 
-        if(sub_struct._on_data_rx != NULL){
+        if(sub_struct._on_data_rx == NULL){
 
             xQueueSend(sub_struct.rx_queue, recv_data->data, 0);
         }
