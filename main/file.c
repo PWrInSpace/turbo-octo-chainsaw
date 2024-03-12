@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -83,7 +84,7 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     if(init_struct->_on_data_rx == NULL){
 
-        sub_struct.rx_queue = xQueueCreate(10, sizeof(uint32_t));
+        sub_struct.rx_queue = xQueueCreate(1, sizeof(recv_cb_cmd_t));
         if(sub_struct.rx_queue == NULL){
 
             return SUB_QUEUE_ERR;
@@ -240,12 +241,30 @@ static void on_recive(sub_recv_cb_data_t *recv_data){
 
         if(sub_struct._on_data_rx == NULL){
 
-            xQueueSend(sub_struct.rx_queue, recv_data->data, 0);
+            if(recv_data->data_size > MAX_DATA_LENGTH){
+                    
+                    return;
+            }
+
+            recv_cb_cmd_t *aux_data;
+
+            mempcy(aux_data, recv_data->data, recv_data->data_size); 
+
+            xQueueSend(sub_struct.rx_queue, aux_data, 0);
         }
         else{
 
-            sub_struct._on_data_rx(recv_data->data, recv_data->data_size);
+            uint8_t *aux_data;
+
+            memcpy(aux_data, recv_data->data, recv_data->data_size);
+            
+            sub_struct._on_data_rx(aux_data, recv_data->data_size);
         }
     }
+    
+}
+
+static void sub_task(void *pvParameters){
+
     
 }

@@ -8,7 +8,6 @@
 #include "esp_now.h"
 
 #define TX_NACK_TIMEOUT_MS 600000
-#define MAX_DATA_LENGTH 250
 typedef enum {
 
     SUB_OK = 0,
@@ -40,12 +39,23 @@ typedef struct {
     uint8_t mac[ESP_NOW_ETH_ALEN];
 } sub_send_cb_data_t;
 
+typedef union {
+    struct command {
+        uint32_t command;
+        int32_t payload;
+    } cmd;
+    uint8_t raw[sizeof(struct command)];
+} recv_cb_cmd_t;
+
+#define MAX_DATA_LENGTH sizeof(recv_cb_cmd_t)
+
 typedef struct {
     
     uint8_t mac[ESP_NOW_ETH_ALEN];
     uint8_t data[MAX_DATA_LENGTH];
     size_t data_size;
 } sub_recv_cb_data_t;
+
 
 typedef enum{
 
