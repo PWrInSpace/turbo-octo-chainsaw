@@ -2,14 +2,17 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/projdefs.h"
+#include "freertos/task.h"
 
 #include "esp_log.h"
 #include "esp_now.h"
+#include "esp_sleep.h"
 
 #include "file.h"
 
@@ -21,24 +24,31 @@
 
 #define OBC_MAC_ADDRESS {0x04, 0x20, 0x04, 0x20, 0x04, 0x20}
 
+#define STATE_MSG_SIZE 1
+
+#define MAX_TX_BUFFER_SIZE 256
+
 
 
 static struct{
 
-    uint8_t dev_mac_address[6];
+    uint8_t dev_mac_address[ESP_NOW_ETH_ALEN];
     bool disable_sleep;
     uint32_t tx_nack_timeout_ms;
     data_to_transmit _data_to_transmit;
     on_data_rx _on_data_rx;
     uint16_t transmit_periods[ENUM_MAX];
-    QueueHandle_t rx_data;
+    QueueHandle_t rx_queue;
+    QueueHandle_t send_cb_queue;
+    QueueHandle_t recv_cb_queue;
     SemaphoreHandle_t sleep_lock;
-    uint8_t *tx_buffer;
+    uint8_t tx_buffer[MAX_TX_BUFFER_SIZE];
     uint8_t tx_data_size;
     esp_now_send_status_t last_message_status;
     uint16_t interval_ms;
     SemaphoreHandle_t mutex;
     uint64_t last_tx_time_ms;
+    TickType_t last_wake_time_ticks;
 
 } sub_struct;
 
@@ -77,8 +87,8 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     if(init_struct->_on_data_rx == NULL){
 
-        sub_struct.rx_data = xQueueCreate(10, sizeof(uint32_t));
-        if(sub_struct.rx_data == NULL){
+        sub_struct.rx_queue = xQueueCreate(1, sizeof(recv_cb_cmd_t));
+        if(sub_struct.rx_queue == NULL){
 
             return SUB_QUEUE_ERR;
         }
@@ -86,7 +96,7 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
     else{
 
         sub_struct._on_data_rx = init_struct->_on_data_rx;
-        sub_struct.rx_data = NULL;
+        sub_struct.rx_queue = NULL;
     }
 
     sub_struct.sleep_lock = xSemaphoreCreateMutex();
@@ -120,6 +130,20 @@ sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[
 
     sub_struct.last_tx_time_ms = esp_timer_get_time();
 
+    sub_struct.send_cb_queue = xQueueCreate(1, sizeof(sub_send_cb_data_t));
+
+    if(sub_struct.send_cb_queue == NULL){
+
+        return SUB_QUEUE_ERR;
+    }
+
+    sub_struct.recv_cb_queue = xQueueCreate(1, sizeof(sub_recv_cb_data_t));
+
+    if(sub_struct.recv_cb_queue == NULL){
+
+        return SUB_QUEUE_ERR;
+    }
+
     return SUB_OK;
 }
 
@@ -138,18 +162,103 @@ static sub_status_t sleep_unlock(void){
 
 esp_now_send_status_t sub_get_last_message_status(void){
 
-    return ESP_NOW_SEND_SUCCESS;
+    return sub_struct.last_message_status;
 }
 
 sub_status_t sub_enable_sleep(void){
     return true;
 }
 
-static sub_status_t send_cb(){
+static void send_cb(const uint8_t *mac, esp_now_send_status_t status){
 
-    return SUB_OK;
+    sub_send_cb_data_t send_data;
+
+    send_data.message_status = status;
+
+    memcpy(send_data.mac, mac, ESP_NOW_ETH_ALEN);
+
+    xQueueSend(sub_struct.send_cb_queue, &send_data, 0);
+    
 }
 
-static sub_status_t recv_cb(){
-    return SUB_OK;
+static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, size_t len){
+
+    if(info->src_addr == NULL || data == NULL || len == 0 || len > MAX_DATA_LENGTH){
+        return;
+    }
+
+    sub_recv_cb_data_t recv_data;
+
+    memcpy(recv_data.mac, info->src_addr, ESP_NOW_ETH_ALEN);
+    memcpy(recv_data.data, data, len);
+    recv_data.data_size = len;
+
+    xQueueSend(sub_struct.recv_cb_queue, &recv_data, 0);
+
+}
+
+static void on_send(sub_send_cb_data_t *send_data){
+
+
+    uint64_t current_time_ms = esp_timer_get_time()/1000;
+
+    sub_struct.last_message_status = send_data->message_status;
+
+    if(send_data->message_status == ESP_NOW_SEND_SUCCESS){
+
+        sub_struct.last_tx_time_ms = current_time_ms;
+
+    }
+    else{
+
+        if(current_time_ms - sub_struct.last_tx_time_ms > sub_struct.tx_nack_timeout_ms){
+
+            if(xSemaphoreTake(sub_struct.mutex, portMAX_DELAY) == pdTRUE){
+
+                sub_struct.interval_ms = sub_struct.transmit_periods[SLEEP_MS];
+
+                xSemaphoreGive(sub_struct.mutex);
+
+            }
+        }
+    }
+}
+
+static void on_recive(sub_recv_cb_data_t *recv_data){
+
+    uint8_t obc_mac_addr[ESP_NOW_ETH_ALEN] = OBC_MAC_ADDRESS;
+
+    if(memcmp(recv_data->mac, obc_mac_addr, ESP_NOW_ETH_ALEN)==0){
+
+        if(recv_data->data_size == STATE_MSG_SIZE && recv_data->data[0] < ENUM_MAX){
+
+            if(xSemaphoreTake(sub_struct.mutex, portMAX_DELAY) == pdTRUE){
+
+                sub_struct.interval_ms = sub_struct.transmit_periods[recv_data->data[0]];
+
+                xSemaphoreGive(sub_struct.mutex);
+            }
+        }
+    }
+    else{
+
+        recv_cb_cmd_t temp_data;
+
+        memcpy(&temp_data, recv_data->data, recv_data->data_size);
+
+        if(sub_struct._on_data_rx == NULL){
+
+            if(recv_data->data_size > MAX_DATA_LENGTH){
+                    
+                    return;
+            }
+
+            xQueueSend(sub_struct.rx_queue, temp_data, 0);
+        }
+        else{
+            
+            sub_struct._on_data_rx(temp_data.raw, recv_data->data_size);
+        }
+    }
+    
 }

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
+
 #include "esp_now.h"
 
 #define TX_NACK_TIMEOUT_MS 600000
@@ -24,13 +25,37 @@ typedef void (*on_data_rx)(uint8_t *buffer, size_t buffer_size);
 
 typedef struct {
 
-    uint8_t dev_mac_address[6];
+    uint8_t dev_mac_address[ESP_NOW_ETH_ALEN];
     bool disable_sleep;
     uint32_t tx_nack_timeout_ms;
     data_to_transmit _data_to_transmit;
     on_data_rx _on_data_rx;
 
 } sub_init_struct_t;
+
+typedef struct {
+
+    esp_now_send_status_t message_status;
+    uint8_t mac[ESP_NOW_ETH_ALEN];
+} sub_send_cb_data_t;
+
+typedef union {
+    struct command {
+        uint32_t command;
+        int32_t payload;
+    } cmd;
+    uint8_t raw[sizeof(struct command)];
+} recv_cb_cmd_t;
+
+#define MAX_DATA_LENGTH sizeof(recv_cb_cmd_t)
+
+typedef struct {
+    
+    uint8_t mac[ESP_NOW_ETH_ALEN];
+    uint8_t data[MAX_DATA_LENGTH];
+    size_t data_size;
+} sub_recv_cb_data_t;
+
 
 typedef enum{
 
@@ -47,6 +72,7 @@ typedef enum{
     ENUM_MAX
 
 } sub_transmit_period_t;
+
 
 esp_now_send_status_t sub_get_last_message_status(void);
 sub_status_t sub_enable_sleep(void);
