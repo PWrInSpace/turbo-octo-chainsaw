@@ -8,9 +8,11 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/projdefs.h"
+#include "freertos/task.h"
 
 #include "esp_log.h"
 #include "esp_now.h"
+#include "esp_sleep.h"
 
 #include "file.h"
 
@@ -24,7 +26,7 @@
 
 #define STATE_MSG_SIZE 1
 
-#define MAX_TX_BUFFER_SIZE 250
+#define MAX_TX_BUFFER_SIZE 256
 
 
 
@@ -40,12 +42,13 @@ static struct{
     QueueHandle_t send_cb_queue;
     QueueHandle_t recv_cb_queue;
     SemaphoreHandle_t sleep_lock;
-    uint8_t *tx_buffer;
+    uint8_t tx_buffer[MAX_TX_BUFFER_SIZE];
     uint8_t tx_data_size;
     esp_now_send_status_t last_message_status;
     uint16_t interval_ms;
     SemaphoreHandle_t mutex;
     uint64_t last_tx_time_ms;
+    TickType_t last_wake_time_ticks;
 
 } sub_struct;
 
@@ -239,6 +242,10 @@ static void on_recive(sub_recv_cb_data_t *recv_data){
     }
     else{
 
+        recv_cb_cmd_t temp_data;
+
+        memcpy(&temp_data, recv_data->data, recv_data->data_size);
+
         if(sub_struct._on_data_rx == NULL){
 
             if(recv_data->data_size > MAX_DATA_LENGTH){
@@ -246,25 +253,12 @@ static void on_recive(sub_recv_cb_data_t *recv_data){
                     return;
             }
 
-            recv_cb_cmd_t *aux_data;
-
-            mempcy(aux_data, recv_data->data, recv_data->data_size); 
-
-            xQueueSend(sub_struct.rx_queue, aux_data, 0);
+            xQueueSend(sub_struct.rx_queue, temp_data, 0);
         }
         else{
-
-            uint8_t *aux_data;
-
-            memcpy(aux_data, recv_data->data, recv_data->data_size);
             
-            sub_struct._on_data_rx(aux_data, recv_data->data_size);
+            sub_struct._on_data_rx(temp_data.raw, recv_data->data_size);
         }
     }
-    
-}
-
-static void sub_task(void *pvParameters){
-
     
 }
