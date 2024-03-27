@@ -14,9 +14,11 @@ typedef enum {
     SUB_NULL_ERR,
     SUB_PERIOD_ERR,
     SUB_ESP_NOW_ERR,
-    SUB_TIMES_ERR,
     SUB_QUEUE_ERR,
-    SUB_MUTEX_ERR
+    SUB_MUTEX_ERR,
+    SUB_TIMER_ERR,
+    SUB_NACK_TMR_ERR,
+    SUB_RX_OVRFLW_ERR
 
 } sub_status_t;
 
@@ -75,7 +77,7 @@ typedef enum{
 
 
 esp_now_send_status_t sub_get_last_message_status(void);
-sub_status_t sub_enable_sleep(void);
+sub_status_t sub_enable_sleep(bool enable);
 sub_status_t sub_init(sub_init_struct_t *init_struct, uint16_t transmit_periods[ENUM_MAX]);
 sub_status_t sub_get_rx_data(uint8_t *data_buffer, size_t buffer_size);
 
