@@ -29,6 +29,10 @@
 
 #define MAX_TX_BUFFER_SIZE 250
 
+#define STATE_MSG_SIZE 1
+
+#define MAX_TX_BUFFER_SIZE 256
+
 
 
 static struct{
@@ -39,6 +43,12 @@ static struct{
     data_to_transmit _data_to_transmit;
     on_data_rx _on_data_rx;
     uint16_t transmit_periods[ENUM_MAX];
+    uint8_t tx_buffer[MAX_TX_BUFFER_SIZE];
+    uint8_t tx_data_size;
+    esp_now_send_status_t last_message_status;
+    uint16_t interval_ms;
+    uint64_t last_tx_time_ms;
+    bool transmit_state;
 
     QueueHandle_t rx_queue;
     QueueHandle_t send_cb_queue;
@@ -47,14 +57,7 @@ static struct{
     SemaphoreHandle_t interval_mutex;
     SemaphoreHandle_t transmit_time_mutex;
     TimerHandle_t transmit_timer;
-
-    uint8_t tx_buffer[MAX_TX_BUFFER_SIZE];
-    uint8_t tx_data_size;
-    esp_now_send_status_t last_message_status;
-    uint16_t interval_ms;
-    uint64_t last_tx_time_ms;
-    bool transmit_state;
-
+  
 } sub_struct;
 
 
@@ -274,7 +277,6 @@ static void on_send(sub_send_cb_data_t *send_data){
                 sub_struct.interval_ms = sub_struct.transmit_periods[SLEEP_MS];
 
                 xSemaphoreGive(sub_struct.interval_mutex);
-
             }
         }
     }
@@ -449,8 +451,8 @@ static void sub_task(void *pvParameters){
             sub_go_to_sleep(temp_interval_ms);
         }
 
-        
-
+        vTaskDelay(pdMS_TO_TICK(10));
 
     }
+
 }
